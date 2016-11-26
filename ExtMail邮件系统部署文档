@@ -1,0 +1,331 @@
+ExtMail邮件系统搭建
+此EXTMail邮件系统基于redhat6.5
+由于redhat的yum在线更新是收费的，如果没有注册的话是不能使用的，因此首先使用网易的163镜像源。（为了使用createrepo）
+1.删除原有的yum
+ [root@mail /]# rpm -aq|grep yum|xargs rpm -e --nodeps  #删除
+2.下载新的yum安装包  #这里使用的是CentOS的yum源
+wget http://vault.centos.org/6.0/os/x86_64/Packages/python-iniparse-0.3.1-2.1.el6.noarch.rpm
+wget http://vault.centos.org/6.0/os/x86_64/Packages/yum-metadata-parser-1.1.2-14.1.el6.x86_64.rpm
+wget http://vault.centos.org/6.0/os/x86_64/Packages/yum-3.2.27-14.el6.centos.noarch.rpm
+wget http://vault.centos.org/6.0/os/x86_64/Packages/yum-plugin-fastestmirror-1.1.26-11.el6.noarch.rpm
+3.安装yum软件包
+rpm -ivh python-iniparse-0.3.1-2.1.el6.noarch.rpm
+rpm -ivh yum-metadata-parser-1.1.2-14.1.el6.x86_64.rpm
+rpm -ivh yum-3.2.27-14.el6.centos.noarch.rpm  
+rpm -ivh yum-plugin-fastestmirror-1.1.26-11.el6.noarch.rpm
+4、更改yum源  #我们使用网易的CentOS镜像源
+cd /etc/yum.repos.d/
+wget  http://mirrors.163.com/.help/CentOS6-Base-163.repo
+vi CentOS6-Base-163.repo  #编辑文件
+把文件里面的$releasever全部替换为版本号，即6 最后保存。
+第一部分：配置YUM源
+使用EMOS1.6.ISO制作本地yum仓库
+[root@mail /]# mkdir /mos
+[root@mail /]# cd /mos
+[root@mail mos]# wget http://mirror.extmail.org/iso/emos/EMOS_1.6_x86_64.iso
+[root@mail mos]# yum install createrepo -y
+[root@mail mos]# mkdir /mnt/EMOS
+[root@mail mos]# mount -o loop /mos/EMOS_1.6_x86_64.iso /mnt/EMOS
+[root@mail mos]# cd /mnt/
+[root@mail mnt]# createrepo .
+[root@mail mnt]# vim /etc/yum.repos.d/EMOS-Base.repo
+加入以下内容：
+[EMOS]
+name=EMOS
+baseurl=file:///mnt/
+enabled=1
+gpgcheck=0
+[root@mail mnt]# yum clean all
+[root@mail mnt]# yum list
+第二部分：安装所需软件
+[root@mail ~]# yum install -y httpd postfix mysql mysql-server php php-mysql php-mbstring php-mcrypt courier-authlib courier-authlib-mysql courier-imap maildrop cyrus-sasl cyrus-sasl-lib cyrus-sasl-plain cyrus-sasl-devel extsuite-webmail extsuite-webman
+cd /root
+
+安装phpmyadmin
+https://www.phpmyadmin.net/downloads/
+下载phpMyAdmin-4.6.4-all-languages.tar.bz2
+[root@mail ~]# tar jxvf phpMyAdmin-4.6.4-all-languages.tar.bz2
+[root@mail ~]# mv phpMyAdmin-4.6.4-all-languages  /var/www/extsuite/phpmyadmin
+[root@mail ~]# cd /var/www/extsuite/phpmyadmin
+[root@mail phpmyadmin]# cp  config.sample.inc.php  config.inc.php
+[root@mail ~]# vim config.inc.php
+编辑config.inc.php 改下面这一行,字符串是任意的。
+$cfg['blowfish_secret'] = ‘skssiwksksie’; /* YOU MUST FILL IN THIS FOR COOKIE AUTH! */
+注：skssiwksksie字符串是任意的
+第三部分：配置邮件系统的相关软件
+为了方便，下面所有的配置文件命令前的”[root@mail ~]#”全部省略了。
+1.配置Postfix（MTA邮件传输代理）
+cd /etc/postfix
+cp main.cf main.cf.bak
+postconf -n > main1.cf
+cp main1.cf main.cf
+vi /etc/postfix/main.cf
+增加如下内容：
+# hostname
+mynetworks = 127.0.0.1
+myhostname = mail.extmail.org
+mydestination = $mynetworks $myhostname
+# banner
+mail_name = Postfix – by extmail.org
+smtpd_banner = $myhostname ESMTP $mail_name
+# response immediately
+smtpd_error_sleep_time = 0s
+# Message and return code control
+message_size_limit = 5242880
+mailbox_size_limit = 5242880
+show_user_unknown_table_name = no
+# Queue lifetime control
+bounce_queue_lifetime = 1d
+maximal_queue_lifetime = 1d
+
+2.配置courier-authlib（imap和maildrop的认证）
+vi /etc/authlib/authmysqlrc
+并将其内容清空，然后增加如下内容:
+MYSQL_SERVER localhost
+MYSQL_USERNAME extmail
+MYSQL_PASSWORD extmail
+MYSQL_SOCKET /var/lib/mysql/mysql.sock
+MYSQL_PORT 3306
+MYSQL_OPT 0
+MYSQL_DATABASE extmail
+MYSQL_USER_TABLE mailbox
+MYSQL_CRYPT_PWFIELD password
+MYSQL_UID_FIELD uidnumber
+MYSQL_GID_FIELD gidnumber
+MYSQL_LOGIN_FIELD username
+MYSQL_HOME_FIELD homedir
+MYSQL_NAME_FIELD name
+MYSQL_MAILDIR_FIELD maildir
+MYSQL_QUOTA_FIELD quota
+MYSQL_SELECT_CLAUSE SELECT username,password,”",uidnumber,gidnumber,\
+CONCAT(‘/home/domains/’,homedir), \
+CONCAT(‘/home/domains/’,maildir), \
+quota, \
+name \
+FROM mailbox \
+WHERE username = ‘$(local_part)@$(domain)’
+vi /etc/authlib/authdaemonrc
+修改如下内容:
+authmodulelist=”authmysql”
+authmodulelistorig=”authmysql”
+修改authdaemon socket目录权限. 如果该目录权限不正确修改，maildrop及postfix等将无法正确获取用户的信息及密码认证：
+chmod 755 /var/spool/authdaemon/
+service courier-authlib start
+如一切正常，命令行将返回如下信息：
+Starting Courier authentication services: authdaemond
+
+3.配置maildrop（MDA邮件投递代理）
+注：在安装maildrop的时候，系统会自动创建vuser用户及vgroup用户组，专门用于邮件的存储，vuser:vgroup的uid/gid都是1000，这与一般的邮件文档中提及用postfix用户存邮件不一样。因为postfix用户的uid一般都低于500，而Suexec模块编译时对UID/GID的要求是要大于500，因此使用postfix用户不能满足要求。其次，如果用Maildrop作为投递代理（MDA），以postfix身份投递的话，会导致postfix MTA错误。
+vim /etc/postfix/master.cf
+注：为了使Postfix支持Maildrop，必须修改/etc/postfix/master.cf文件中的相应部分，改为：
+maildrop   unix   –   n   n   –   -   pipe
+  flags=DRhu  user=vuser  argv=maildrop  -w  90  -d  ${user}@${nexthop}  ${recipient} ${user}  ${extension}  {nexthop}
+注意：flags前面有“两个空格”
+由于maildrop不支持一次接收多个收件人，因此必须在main.cf里增加如下参数：
+vim /etc/postfix/main.cf
+maildrop_destination_recipient_limit = 1
+测试maildrop对authlib支持
+maildrop -v
+如果出现下面的内容，就证明成功了。
+maildrop 2.0.4 Copyright 1998-2005 Double Precision, Inc.
+GDBM extensions enabled.
+Courier Authentication Library extension enabled.
+Maildir quota extension enabled.
+This program is distributed under the terms of the GNU General Public
+License. See COPYING for additional information.
+
+4.配置Apache（为邮件系统提供网页服务）
+保证phpmyadmin在/var/www/extsuite/下(mv ~/phpmyadmin /var/www/extsuite/)，在这里进行相应的配置
+vi /etc/httpd/conf/httpd.conf
+定义虚拟主机的相关内容：
+在最后加上：
+NameVirtualHost *:80
+# VirtualHost for ExtMail Solution
+<VirtualHost *:80>
+ServerName  mail.extmail.org
+DocumentRoot  /var/www/extsuite/extmail/html/              #web服务
+ScriptAlias  /extmail/cgi/  /var/www/extsuite/extmail/cgi/
+Alias  /extmail  /var/www/extsuite/extmail/html/
+ScriptAlias  /extman/cgi/  /var/www/extsuite/extman/cgi/
+Alias  /extman  /var/www/extsuite/extman/html/                #后台管理
+Alias  /phpmyadmin  /var/www/extsuite/phpmyadmin/
+# Suexec config
+SuexecUserGroup vuser vgroup
+</VirtualHost>
+
+启动 service httpd start
+如果启动HTTPD的时候出现下面的情况，
+Starting httpd: httpd: Could not reliably determine the server’s fully qualified domain name, using mail.extmail.rg for ServerName
+请把#ServerName www.example.com:80这个打开（去掉#），
+并重启service httpd restart
+
+5.配置Extmail（提供网页收发邮件服务）
+cd /var/www/extsuite/extmail
+cp webmail.cf.default webmail.cf
+vim webmail.cf
+更改成下面的内容(数据库用户名和密码，系统默认)
+SYS_MYSQL_USER = extmail
+SYS_MYSQL_PASS = extmail
+SYS_MYSQL_DB = extmail
+更新cgi目录权限，由于SuEXEC的需要，必须将extmail的cgi目录修改成vuser:vgroup权限
+chown -R vuser:vgroup /var/www/extsuite/extmail/cgi/
+
+6.配置Extman（提供邮件网页后台管理功能）
+更新cgi目录权限，由于SuEXEC的需要，必须将extman的cgi目录修改成vuser:vgroup权限
+chown -R vuser:vgroup /var/www/extsuite/extman/cgi/
+
+链接基本库到Extmail
+mkdir /tmp/extman
+chown -R vuser:vgroup /tmp/extman
+
+数据库初始化
+service mysqld start 
+导入mysql数据库结构及初始化数据（如果前面没有更改mysql密码的话，root密码默认为空）
+mysql -u root -p < /var/www/extsuite/extman/docs/extmail.sql 
+mysql -u root -p < /var/www/extsuite/extman/docs/init.sql
+注：上述导入初始化SQL时，默认的uidnumber/gidnumber都是1000，这和vuser:vgroup 的uid/gid一致，是因为maildrop投递时会从数据库里取uidnumber/gidnumber，而在master.cf里已经定义好了投递时的运行身份（vuser:vgroup），所以这两个字段的内容必须为1000，否则将出现投递错误，例如报0×06等错误。 
+
+设置虚拟域和虚拟用户的配置文件
+cd /var/www/extsuite/extman/docs 
+cp mysql_virtual_alias_maps.cf /etc/postfix/ 
+cp mysql_virtual_domains_maps.cf /etc/postfix/ 
+cp mysql_virtual_mailbox_maps.cf /etc/postfix/ 
+cp mysql_virtual_sender_maps.cf /etc/postfix/
+配置main.cf:
+vi /etc/postfix/main.cf
+增加以下内容：              (    #extmail的虚拟用户邮箱   )
+# extmail config here
+virtual_alias_maps = mysql:/etc/postfix/mysql_virtual_alias_maps.cf
+virtual_mailbox_domains = mysql:/etc/postfix/mysql_virtual_domains_maps.cf
+virtual_mailbox_maps = mysql:/etc/postfix/mysql_virtual_mailbox_maps.cf
+virtual_transport = maildrop:
+测试authlib
+/usr/sbin/authtest -s login postmaster@extmail.org extmail
+结果如下：
+Authentication succeeded.
+Authenticated: postmaster@extmail.org (uid 1000, gid 1000)
+Home Directory: /home/domains/extmail.org/postmaster
+Maildir: /home/domains/extmail.org/postmaster/Maildir/
+Quota: 104857600S
+Encrypted Password: $1$phz1mRrj$3ok6BjeaoJYWDBsEPZb5C0
+Cleartext Password: extmail
+Options: (none)
+这样表明ExtMan的正确安装，数据库也正确导入，courier-authlib能正确连接到mysql数据库
+
+最后访问http://localhost/extmail/cgi/index.cgi，如无意外，将看到webmail的登陆页，不过此时还没有加正式的用户，所以不能登陆，包括postmaster@extmail.org也不行。必须要登陆到http://localhost/extman/cgi/index.cgi里增加一个新帐户才能登陆。
+ExtMan的默认超级管理员帐户：root@extmail.org，初始密码：extmail*123*，登陆成功后，建议将密码修改，以确保安全。
+这时候可以建立个test@extmail.org用户，密码为test
+为实验做准备。
+配置Extman后台的图形化日志功能
+启动mailgraph_ext（后台管理的图像日志信息）
+/usr/local/mailgraph_ext/mailgraph-init start
+启动cmdserver(在后台显示系统信息)
+/var/www/extsuite/extman/daemon/cmdserver –daemon
+加入开机自启动：
+echo “/usr/local/mailgraph_ext/mailgraph-init start” >> /etc/rc.d/rc.local
+echo “/var/www/extsuite/extman/daemon/cmdserver -v -d” >> /etc/rc.d/rc.local
+
+7.配置Courier-imap(imap和pop3接收邮件代理)
+注：由于Courier-imap的IMAP目录是按UTF-7编码的，ExtMail目前还没有正式支持IMAP目录，因此需要屏蔽IMAP，只提供pop3服务。而就目前的使用情况来看，IMAP使用的非常少，绝大部分OutLook/Foxmail用户都习惯使用POP3而非IMAP。
+vi /usr/lib/courier-imap/etc/imapd
+修改如下：
+IMAPDSTART=NO
+vi /usr/lib/courier-imap/etc/imapd-ssl
+修改如下：
+IMAPDSSLSTART=NO
+然后重新启动courier-imap：
+service courier-imap start
+
+为了下面的测试，请先启动httpd postfix
+测试POP3是否正常工作。(请首先登录extman自行建立test@extmail.org用户，密码:test)
+下面加粗部分是输入内容
+telnet localhost 110
+Trying 127.0.0.1…
+Connected to localhost.localdomain (127.0.0.1).
+Escape character is ‘^]’.
++OK Hello there.
+user test@extmail.org
++OK Password required.
+pass test
++OK logged in.
+list
++OK POP3 clients that break here, they violate STD53.
+.
+quit
++OK Bye-bye.
+
+8.配置cyrus-sasl（SMTP认证）
+注：由于系统cyrus-sasl默认没有打开authdaemon的支持，为了使用集中认证的authlib，必须打开这个支持。为此我们必须删除系统的cyrus-sasl相关的所有软件包，替换成打开了authdaemon支持的sasl软件包（也就是EMOS中的软件包）。
+配置cyrus-sasl
+Postfix的SMTP认证需要通过Cyrus-SASL，连接到authdaemon获取认证信息。
+vi /etc/postfix/main.cf
+增加如下内容：
+# smtpd related config
+smtpd_recipient_restrictions =
+permit_mynetworks,
+permit_sasl_authenticated,
+reject_non_fqdn_hostname,
+reject_non_fqdn_sender,
+reject_non_fqdn_recipient,
+reject_unauth_destination,
+reject_unauth_pipelining,
+reject_invalid_hostname,
+# SMTP sender login matching config
+smtpd_sender_restrictions =
+permit_mynetworks,
+reject_sender_login_mismatch,
+reject_authenticated_sender_login_mismatch,
+reject_unauthenticated_sender_login_mismatch
+smtpd_sender_login_maps =
+mysql:/etc/postfix/mysql_virtual_sender_maps.cf,
+mysql:/etc/postfix/mysql_virtual_alias_maps.cf
+# SMTP AUTH config here
+broken_sasl_auth_clients = yes
+smtpd_sasl_auth_enable = yes
+smtpd_sasl_local_domain = $myhostname
+smtpd_sasl_security_options = noanonymous
+编辑smtpd.conf文件
+vim /usr/lib64/sasl2/smtpd.conf
+将其内容改为：
+pwcheck_method: authdaemond
+log_level: 3
+mech_list: PLAIN LOGIN
+authdaemond_path:/var/spool/authdaemon/socket
+重新启动postfix：
+service postfix restart
+测试SMTP认证
+通过以下命令获得postmaster@extmail.org的用户名及密码的BASE64编码：
+perl -e ‘use MIME::Base64; print encode_base64(“postmaster\@extmail.org”)’
+内容如下：
+cG9zdG1hc3RlckBleHRtYWlsLm9yZw==
+perl -e ‘use MIME::Base64; print encode_base64(“extmail”)’
+内容如下：
+ZXh0bWFpbA==
+
+然后可以本机测试：
+telnet localhost 25
+Trying 127.0.0.1…
+Connected to localhost.localdomain (127.0.0.1).
+Escape character is ‘^]’.
+220 mail.91ops.com ESMTP Postfix – by extmail.org
+ehlo localhost
+250-mail.extmail.org
+250-PIPELINING
+250-SIZE 5242880
+250-VRFY
+250-ETRN
+250-AUTH LOGIN PLAIN
+250-AUTH=LOGIN PLAIN
+250-ENHANCEDSTATUSCODES
+250-8BITMIME
+250 DSN
+quit
+221 2.0.0 Bye
+Connection closed by foreign host.
+第四部分：设置服务开机启动，并进行邮件互发测试
+chkconfig httpd on
+chkconfig mysqld on
+chkconfig postfix on
+chkconfig courier-imap on
+chkconfig courier-authlib on
+配置完成，可以进入extmail和extman啦！
